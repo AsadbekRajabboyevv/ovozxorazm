@@ -1,0 +1,18 @@
+# Environment variables (Xavfsizlik uchun maxfiy kalitlar)
+.env
+.env.local
+
+# Python cache & virtualenv
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+
+# Database & local media storage
+data/
+*.sqlite
+*.sqlite3
+*.db
+*.log
