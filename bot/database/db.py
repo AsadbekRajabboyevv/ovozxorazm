@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS voices (
     file_id TEXT NOT NULL,
     file_unique_id TEXT,
     duration INTEGER DEFAULT 0,
-    storage_message_id INTEGER,
+    storage_message_id INTEGER UNIQUE,
     use_count INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -137,6 +137,45 @@ class Database:
             )
             await db.commit()
             return cursor.lastrowid
+
+    async def update_voice_storage_info(self, voice_id: int, file_id: str, storage_message_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE voices SET file_id = ?, storage_message_id = ? WHERE id = ?",
+                (file_id, storage_message_id, voice_id)
+            )
+            await db.commit()
+
+    async def import_voice_if_not_exists(self, title: str, tags: str, file_id: str, file_unique_id: str = "", duration: int = 0, storage_message_id: Optional[int] = None, custom_id: Optional[int] = None) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            if storage_message_id:
+                cursor = await db.execute("SELECT id FROM voices WHERE storage_message_id = ?", (storage_message_id,))
+                if await cursor.fetchone():
+                    return False
+
+            if custom_id:
+                cursor = await db.execute("SELECT id FROM voices WHERE id = ?", (custom_id,))
+                if await cursor.fetchone():
+                    await db.execute(
+                        "UPDATE voices SET title = ?, tags = ?, file_id = ?, file_unique_id = ?, duration = ?, storage_message_id = ? WHERE id = ?",
+                        (title.strip(), tags.strip().lower(), file_id, file_unique_id, duration, storage_message_id, custom_id)
+                    )
+                    await db.commit()
+                    return True
+                else:
+                    await db.execute(
+                        "INSERT INTO voices (id, title, tags, file_id, file_unique_id, duration, storage_message_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (custom_id, title.strip(), tags.strip().lower(), file_id, file_unique_id, duration, storage_message_id)
+                    )
+                    await db.commit()
+                    return True
+
+            await db.execute(
+                "INSERT INTO voices (title, tags, file_id, file_unique_id, duration, storage_message_id) VALUES (?, ?, ?, ?, ?, ?)",
+                (title.strip(), tags.strip().lower(), file_id, file_unique_id, duration, storage_message_id)
+            )
+            await db.commit()
+            return True
 
     async def search_voices(self, query: str, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
         async with aiosqlite.connect(self.db_path) as db:

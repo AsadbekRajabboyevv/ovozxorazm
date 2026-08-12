@@ -9,10 +9,13 @@ def admin_main_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="➕ Ovoz Qo'shish", callback_data="admin_add_voice"),
-            InlineKeyboardButton(text="📦 Baza Kanal (Storage)", callback_data="admin_storage_channel")
+            InlineKeyboardButton(text="🔄 Kanal Ovozlarini Tiklash", callback_data="admin_import_voices")
         ],
         [
-            InlineKeyboardButton(text="📢 Majburiy Obuna", callback_data="admin_sub_menu"),
+            InlineKeyboardButton(text="📦 Baza Kanal (Storage)", callback_data="admin_storage_channel"),
+            InlineKeyboardButton(text="📢 Majburiy Obuna", callback_data="admin_sub_menu")
+        ],
+        [
             InlineKeyboardButton(text="✉️ Ommaviy Xabar", callback_data="admin_broadcast")
         ]
     ]

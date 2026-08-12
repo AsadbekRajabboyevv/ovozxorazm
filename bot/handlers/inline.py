@@ -1,7 +1,6 @@
 import logging
-import uuid
 from aiogram import Router
-from aiogram.types import InlineQuery, InlineQueryResultCachedVoice, InlineQueryResultArticle, InputTextMessageContent
+from aiogram.types import InlineQuery, InlineQueryResultCachedVoice
 from bot.database.db import Database
 
 router = Router()
@@ -23,19 +22,9 @@ async def inline_search_handler(inline_query: InlineQuery, db: Database):
         voices = await db.search_voices(query=query, limit=PAGE_LIMIT, offset=offset)
         logging.info(f"Inline Query: '{query}' | Offset: {offset} | Voices found: {len(voices)}")
 
-        if not voices and offset == 0:
-            results = [
-                InlineQueryResultArticle(
-                    id=str(uuid.uuid4()),
-                    title="🔍 Ovoz topilmadi",
-                    description=f"'{query}' bo'yicha hech qanday ovoz topilmadi." if query else "Bazada hozircha ovozlar mavjud emas.",
-                    input_message_content=InputTextMessageContent(
-                        message_text=f"🔍 <b>'{query}'</b> bo'yicha ovoz topilmadi.",
-                        parse_mode="HTML"
-                    )
-                )
-            ]
-            await inline_query.answer(results, cache_time=1, is_personal=True)
+        if not voices:
+            # Return empty results list so nothing can be clicked or sent to the chat (read-only)
+            await inline_query.answer([], cache_time=1, is_personal=True)
             return
 
         results = []
@@ -58,17 +47,7 @@ async def inline_search_handler(inline_query: InlineQuery, db: Database):
         )
     except Exception as e:
         logging.error(f"Inline search error: {e}", exc_info=True)
-        results = [
-            InlineQueryResultArticle(
-                id=str(uuid.uuid4()),
-                title="⚠️ Xatolik yuz berdi",
-                description="Ovozlarni yuklashda xatolik yuz berdi.",
-                input_message_content=InputTextMessageContent(
-                    message_text="⚠️ Ovozlarni yuklashda xatolik yuz berdi."
-                )
-            )
-        ]
-        await inline_query.answer(results, cache_time=1, is_personal=True)
+        await inline_query.answer([], cache_time=1, is_personal=True)
 
 @router.chosen_inline_result()
 async def chosen_inline_handler(chosen_result, db: Database):

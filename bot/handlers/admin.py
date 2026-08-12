@@ -1,6 +1,8 @@
 import os
+import re
 import uuid
 import asyncio
+from datetime import datetime
 from aiogram import Router, F, Bot
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
@@ -35,10 +37,12 @@ class AddChannelFSM(StatesGroup):
 class SetStorageChannelFSM(StatesGroup):
     waiting_storage_channel = State()
 
+class ImportVoicesFSM(StatesGroup):
+    waiting_range = State()
+
 class BroadcastFSM(StatesGroup):
     waiting_message = State()
 
-# Helper function to edit message safely
 async def safe_edit_text(call: CallbackQuery, text: str, reply_markup=None, parse_mode="HTML"):
     try:
         await call.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
@@ -51,7 +55,6 @@ async def safe_edit_text(call: CallbackQuery, text: str, reply_markup=None, pars
         except Exception:
             pass
 
-# Dummy handler for non-clickable pagination info button
 @router.callback_query(F.data == "ignore")
 async def cb_ignore(call: CallbackQuery):
     await call.answer()
@@ -121,6 +124,112 @@ async def process_set_storage_channel(message: Message, state: FSMContext, db: D
             parse_mode="HTML"
         )
 
+# Import / Sync Voices from Channel
+@router.callback_query(F.data == "admin_import_voices")
+async def cb_import_voices_start(call: CallbackQuery, db: Database, state: FSMContext):
+    await call.answer()
+    await state.clear()
+    storage_ch = await db.get_setting("storage_channel", "")
+    if not storage_ch:
+        await safe_edit_text(
+            call,
+            "⚠️ <b>Avval Baza (Storage) Kanalini sozlang!</b>\n\n"
+            "Kanal ovozlarini qayta tiklash uchun avval admin paneldan <b>'📦 Baza Kanal'</b> menyusi orqali saqlash kanalini biriktiring.",
+            reply_markup=admin_main_keyboard()
+        )
+        return
+
+    await state.set_state(ImportVoicesFSM.waiting_range)
+    text = (
+        "🔄 <b>Kanal Ovozlarini Qayta Tiklash (Import):</b>\n\n"
+        "Baza kanaldagi xabarlar ID oralig'ini kiriting.\n"
+        "<i>(Masalan: <code>1-300</code> yoki <code>1-1000</code>)</i>\n\n"
+        "Bot kanaldagi barcha ovozli xabarlarni skan qiladi va nom hamda teglari bilan bazaga qayta tiklaydi."
+    )
+    await safe_edit_text(call, text, reply_markup=back_to_admin_keyboard())
+
+@router.message(ImportVoicesFSM.waiting_range, F.text)
+async def process_import_voices_range(message: Message, state: FSMContext, db: Database, bot: Bot):
+    storage_ch = await db.get_setting("storage_channel", "")
+    val = message.text.strip()
+    
+    start_id = 1
+    end_id = 500
+
+    if "-" in val:
+        parts = val.split("-")
+        if parts[0].isdigit() and parts[1].isdigit():
+            start_id = int(parts[0])
+            end_id = int(parts[1])
+    elif val.isdigit():
+        end_id = int(val)
+
+    await state.clear()
+    status_msg = await message.answer(f"⏳ Kanal skan qilinmoqda (Message ID: {start_id} - {end_id})...")
+
+    imported = 0
+    skipped = 0
+
+    for msg_id in range(start_id, end_id + 1):
+        try:
+            copied_msg = await bot.copy_message(
+                chat_id=message.from_user.id,
+                from_chat_id=storage_ch,
+                message_id=msg_id
+            )
+            
+            if copied_msg.voice:
+                caption = copied_msg.caption or ""
+                
+                custom_id = None
+                title = f"Ovoz #{msg_id}"
+                tags = "ovoz"
+
+                id_match = re.search(r"Id:\s*(\d+)", caption, re.IGNORECASE)
+                if id_match:
+                    custom_id = int(id_match.group(1))
+
+                title_match = re.search(r"Ovoz nomi:\s*(.+)", caption, re.IGNORECASE)
+                if title_match:
+                    title = title_match.group(1).strip()
+
+                tags_match = re.search(r"Ovoz teglari:\s*(.+)", caption, re.IGNORECASE)
+                if tags_match:
+                    tags = tags_match.group(1).strip()
+
+                success = await db.import_voice_if_not_exists(
+                    title=title,
+                    tags=tags,
+                    file_id=copied_msg.voice.file_id,
+                    file_unique_id=copied_msg.voice.file_unique_id or "",
+                    duration=copied_msg.voice.duration or 0,
+                    storage_message_id=msg_id,
+                    custom_id=custom_id
+                )
+
+                if success:
+                    imported += 1
+                else:
+                    skipped += 1
+
+            try:
+                await bot.delete_message(chat_id=message.from_user.id, message_id=copied_msg.message_id)
+            except Exception:
+                pass
+
+        except Exception:
+            pass
+
+        await asyncio.sleep(0.03)
+
+    await status_msg.edit_text(
+        f"✅ <b>Kanal sinxronlash yakunlandi!</b>\n\n"
+        f"🎙 <b>Yangi tiklangan ovozlar:</b> {imported} ta\n"
+        f"⏩ <b>Mavjud/O'tkazib yuborilgan:</b> {skipped} ta",
+        reply_markup=admin_main_keyboard(),
+        parse_mode="HTML"
+    )
+
 # Voice Management & Pagination
 @router.callback_query(F.data.startswith("admin_voices_page_"))
 async def cb_admin_voices(call: CallbackQuery, db: Database, state: FSMContext):
@@ -174,7 +283,7 @@ async def cb_voice_detail(call: CallbackQuery, db: Database, state: FSMContext):
         parse_mode="HTML"
     )
 
-# Add Voice Process
+# Add Voice Process (MP3 -> pydub conversion -> DB Save -> Channel Upload with Formatted Caption)
 @router.callback_query(F.data == "admin_add_voice")
 async def cb_add_voice_start(call: CallbackQuery, state: FSMContext, db: Database):
     await call.answer()
@@ -207,23 +316,17 @@ async def process_voice_audio(message: Message, state: FSMContext, bot: Bot, db:
         return
 
     temp_in = f"data/temp_{uuid.uuid4().hex}"
-    status_msg = await message.answer("⏳ Audio pydub orqali convert qilinmoqda va Baza kanalga yuklanmoqda...")
+    status_msg = await message.answer("⏳ Audio pydub orqali convert qilinmoqda...")
     
     try:
         file_id = None
         duration = 0
         file_unique_id = ""
-        storage_msg_id = None
 
         if message.voice:
-            storage_msg = await bot.send_voice(
-                chat_id=storage_ch,
-                voice=message.voice.file_id
-            )
-            file_id = storage_msg.voice.file_id
-            duration = storage_msg.voice.duration or 0
-            file_unique_id = storage_msg.voice.file_unique_id
-            storage_msg_id = storage_msg.message_id
+            file_id = message.voice.file_id
+            duration = message.voice.duration or 0
+            file_unique_id = message.voice.file_unique_id
         else:
             audio_obj = message.audio or message.document
             if not audio_obj:
@@ -237,14 +340,10 @@ async def process_voice_audio(message: Message, state: FSMContext, bot: Bot, db:
             output_name = uuid.uuid4().hex
             converted_ogg = await AudioService.convert_mp3_to_voice_ogg(download_path, output_name)
             
-            storage_msg = await bot.send_voice(
-                chat_id=storage_ch,
-                voice=FSInputFile(converted_ogg)
-            )
-            file_id = storage_msg.voice.file_id
-            duration = storage_msg.voice.duration or 0
-            file_unique_id = storage_msg.voice.file_unique_id
-            storage_msg_id = storage_msg.message_id
+            sent_temp = await message.answer_voice(voice=FSInputFile(converted_ogg))
+            file_id = sent_temp.voice.file_id
+            duration = sent_temp.voice.duration or 0
+            file_unique_id = sent_temp.voice.file_unique_id
             
             AudioService.cleanup_file(download_path)
             AudioService.cleanup_file(converted_ogg)
@@ -252,20 +351,18 @@ async def process_voice_audio(message: Message, state: FSMContext, bot: Bot, db:
         await state.update_data(
             file_id=file_id,
             duration=duration,
-            file_unique_id=file_unique_id,
-            storage_message_id=storage_msg_id
+            file_unique_id=file_unique_id
         )
         await state.set_state(AddVoiceFSM.waiting_title)
         
         await status_msg.delete()
         await message.answer(
-            f"✅ Baza kanalga yuklandi (Message ID: <b>#{storage_msg_id}</b>)!\n\n"
             "✏️ <b>Endi ushbu ovoz uchun nom kiriting:</b>",
             reply_markup=back_to_admin_keyboard(),
             parse_mode="HTML"
         )
     except Exception as e:
-        await status_msg.edit_text(f"❌ Xatolik yuz berdi: {str(e)}\nBot Baza kanalda admin ekanligini tekshiring.")
+        await status_msg.edit_text(f"❌ Xatolik yuz berdi: {str(e)}")
         if os.path.exists(temp_in + "_in"):
             AudioService.cleanup_file(temp_in + "_in")
 
@@ -284,26 +381,54 @@ async def process_voice_title(message: Message, state: FSMContext):
     )
 
 @router.message(AddVoiceFSM.waiting_tags, F.text)
-async def process_voice_tags(message: Message, state: FSMContext, db: Database):
+async def process_voice_tags(message: Message, state: FSMContext, db: Database, bot: Bot):
     tags = message.text.strip()
     data = await state.get_data()
-    
+    storage_ch = await db.get_setting("storage_channel", "")
+
+    # 1. Add voice to DB to get generated ID
     voice_id = await db.add_voice(
         title=data["title"],
         tags=tags,
         file_id=data["file_id"],
         file_unique_id=data.get("file_unique_id", ""),
-        duration=data.get("duration", 0),
-        storage_message_id=data.get("storage_message_id")
+        duration=data.get("duration", 0)
     )
-    
+
+    created_at_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # 2. Format channel caption
+    channel_caption = (
+        f"Id: {voice_id}\n"
+        f"Ovoz nomi: {data['title']}\n"
+        f"Ovoz teglari: {tags}\n"
+        f"Yuklangan vaqti: {created_at_str}"
+    )
+
+    storage_msg_id = None
+    final_file_id = data["file_id"]
+
+    # 3. Send voice to Storage Channel with required caption format
+    if storage_ch:
+        try:
+            storage_msg = await bot.send_voice(
+                chat_id=storage_ch,
+                voice=data["file_id"],
+                caption=channel_caption
+            )
+            storage_msg_id = storage_msg.message_id
+            final_file_id = storage_msg.voice.file_id
+            await db.update_voice_storage_info(voice_id, final_file_id, storage_msg_id)
+        except Exception as e:
+            await message.answer(f"⚠️ Baza kanaliga yuborishda xatolik: {str(e)}")
+
     await state.clear()
     
     await message.answer(
         f"✅ <b>Ovoz muvaffaqiyatli saqlandi!</b> (ID: {voice_id})\n\n"
         f"📌 <b>Nomi:</b> {data['title']}\n"
         f"🏷 <b>Teglar:</b> {tags}\n"
-        f"📦 <b>Baza Msg ID:</b> #{data.get('storage_message_id')}",
+        f"📦 <b>Baza Msg ID:</b> #{storage_msg_id}",
         reply_markup=admin_main_keyboard(),
         parse_mode="HTML"
     )
