@@ -5,12 +5,19 @@ import uuid
 
 router = Router()
 
+PAGE_LIMIT = 20
+
 @router.inline_query()
 async def inline_search_handler(inline_query: InlineQuery, db: Database):
     query = inline_query.query.strip()
-    voices = await db.search_voices(query=query, limit=50)
 
-    if not voices:
+    offset = 0
+    if inline_query.offset and inline_query.offset.isdigit():
+        offset = int(inline_query.offset)
+
+    voices = await db.search_voices(query=query, limit=PAGE_LIMIT, offset=offset)
+
+    if not voices and offset == 0:
         results = [
             InlineQueryResultArticle(
                 id=str(uuid.uuid4()),
@@ -35,7 +42,14 @@ async def inline_search_handler(inline_query: InlineQuery, db: Database):
             )
         )
 
-    await inline_query.answer(results, cache_time=1, is_personal=True)
+    next_offset = str(offset + len(voices)) if len(voices) == PAGE_LIMIT else ""
+
+    await inline_query.answer(
+        results,
+        next_offset=next_offset,
+        cache_time=1,
+        is_personal=True
+    )
 
 @router.chosen_inline_result()
 async def chosen_inline_handler(chosen_result, db: Database):

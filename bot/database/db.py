@@ -138,13 +138,13 @@ class Database:
             await db.commit()
             return cursor.lastrowid
 
-    async def search_voices(self, query: str, limit: int = 50) -> List[Dict[str, Any]]:
+    async def search_voices(self, query: str, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             q = f"%{query.strip().lower()}%"
             cursor = await db.execute(
-                "SELECT * FROM voices WHERE LOWER(title) LIKE ? OR LOWER(tags) LIKE ? ORDER BY use_count DESC, id DESC LIMIT ?",
-                (q, q, limit)
+                "SELECT * FROM voices WHERE LOWER(title) LIKE ? OR LOWER(tags) LIKE ? ORDER BY use_count DESC, id DESC LIMIT ? OFFSET ?",
+                (q, q, limit, offset)
             )
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
