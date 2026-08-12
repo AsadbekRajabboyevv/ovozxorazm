@@ -71,18 +71,26 @@ async def cb_admin_stats(call: CallbackQuery, db: Database, state: FSMContext):
     await call.answer()
     await state.clear()
     stats = await db.get_user_stats()
+    top_voices = await db.get_top_voices(limit=5)
     force_sub = await db.get_setting("force_sub", "off")
     storage_ch = await db.get_setting("storage_channel", "Belgilanmagan")
     sub_status = "🟢 Yoqilgan" if force_sub == "on" else "🔴 O'chirilgan"
+
+    top_text = ""
+    if top_voices:
+        top_text = "\n\n🔥 <b>Eng Ko'p Ishlatilgan Ovozlar (Top 5):</b>\n"
+        for idx, v in enumerate(top_voices, 1):
+            top_text += f"<b>{idx}.</b> 🎙 {v['title']} — <b>{v['use_count']}</b> marta\n"
 
     text = (
         "📊 <b>Bot Statistikasi va Ma'lumotlar:</b>\n\n"
         f"👥 <b>Foydalanuvchilar soni:</b> {stats['users']} ta\n"
         f"🎙 <b>Jami ovozlar soni:</b> {stats['voices']} ta\n"
-        f"⚡ <b>Ovozlardan foydalanishlar:</b> {stats['uses']} marotaba\n"
+        f"⚡ <b>Jami foydalanishlar:</b> {stats['uses']} marotaba\n"
         f"📦 <b>Baza (Storage) Kanali:</b> {storage_ch}\n"
         f"📢 <b>Obuna kanallari:</b> {stats['channels']} ta\n"
-        f"🔒 <b>Majburiy obuna holati:</b> {sub_status}\n"
+        f"🔒 <b>Majburiy obuna holati:</b> {sub_status}"
+        f"{top_text}"
     )
     await safe_edit_text(call, text, reply_markup=admin_main_keyboard())
 

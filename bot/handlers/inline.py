@@ -1,6 +1,6 @@
 import logging
 from aiogram import Router
-from aiogram.types import InlineQuery, InlineQueryResultCachedVoice
+from aiogram.types import InlineQuery, InlineQueryResultCachedVoice, ChosenInlineResult
 from bot.database.db import Database
 
 router = Router()
@@ -23,7 +23,6 @@ async def inline_search_handler(inline_query: InlineQuery, db: Database):
         logging.info(f"Inline Query: '{query}' | Offset: {offset} | Voices found: {len(voices)}")
 
         if not voices:
-            # Return empty results list so nothing can be clicked or sent to the chat (read-only)
             await inline_query.answer([], cache_time=1, is_personal=True)
             return
 
@@ -50,11 +49,17 @@ async def inline_search_handler(inline_query: InlineQuery, db: Database):
         await inline_query.answer([], cache_time=1, is_personal=True)
 
 @router.chosen_inline_result()
-async def chosen_inline_handler(chosen_result, db: Database):
+async def chosen_inline_handler(chosen_result: ChosenInlineResult, db: Database):
     try:
         res_id = chosen_result.result_id
+        voice_id = None
         if res_id.startswith("v_"):
             voice_id = int(res_id.split("_")[1])
+        elif res_id.isdigit():
+            voice_id = int(res_id)
+
+        if voice_id:
             await db.increment_voice_usage(voice_id)
-    except Exception:
-        pass
+            logging.info(f"✅ Voice #{voice_id} usage incremented in DB!")
+    except Exception as e:
+        logging.error(f"❌ Error incrementing voice usage: {e}", exc_info=True)

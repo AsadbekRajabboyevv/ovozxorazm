@@ -188,6 +188,13 @@ class Database:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
 
+    async def get_top_voices(self, limit: int = 10) -> List[Dict[str, Any]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM voices ORDER BY use_count DESC, id DESC LIMIT ?", (limit,))
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
     async def get_all_voices(self, offset: int = 0, limit: int = 10) -> List[Dict[str, Any]]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
