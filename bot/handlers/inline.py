@@ -1,7 +1,8 @@
+import logging
+import uuid
 from aiogram import Router
 from aiogram.types import InlineQuery, InlineQueryResultCachedVoice, InlineQueryResultArticle, InputTextMessageContent
 from bot.database.db import Database
-import uuid
 
 router = Router()
 
@@ -12,49 +13,69 @@ async def inline_search_handler(inline_query: InlineQuery, db: Database):
     query = inline_query.query.strip()
 
     offset = 0
-    if inline_query.offset and inline_query.offset.isdigit():
-        offset = int(inline_query.offset)
+    if inline_query.offset:
+        try:
+            offset = int(inline_query.offset)
+        except ValueError:
+            offset = 0
 
-    voices = await db.search_voices(query=query, limit=PAGE_LIMIT, offset=offset)
+    try:
+        voices = await db.search_voices(query=query, limit=PAGE_LIMIT, offset=offset)
+        logging.info(f"Inline Query: '{query}' | Offset: {offset} | Voices found: {len(voices)}")
 
-    if not voices and offset == 0:
+        if not voices and offset == 0:
+            results = [
+                InlineQueryResultArticle(
+                    id=str(uuid.uuid4()),
+                    title="🔍 Ovoz topilmadi",
+                    description=f"'{query}' bo'yicha hech qanday ovoz topilmadi." if query else "Bazada hozircha ovozlar mavjud emas.",
+                    input_message_content=InputTextMessageContent(
+                        message_text=f"🔍 <b>'{query}'</b> bo'yicha ovoz topilmadi.",
+                        parse_mode="HTML"
+                    )
+                )
+            ]
+            await inline_query.answer(results, cache_time=1, is_personal=True)
+            return
+
+        results = []
+        for v in voices:
+            results.append(
+                InlineQueryResultCachedVoice(
+                    id=f"v_{v['id']}",
+                    voice_file_id=v["file_id"],
+                    title=v["title"]
+                )
+            )
+
+        next_offset = str(offset + len(voices)) if len(voices) >= PAGE_LIMIT else ""
+
+        await inline_query.answer(
+            results,
+            next_offset=next_offset,
+            cache_time=1,
+            is_personal=True
+        )
+    except Exception as e:
+        logging.error(f"Inline search error: {e}", exc_info=True)
         results = [
             InlineQueryResultArticle(
                 id=str(uuid.uuid4()),
-                title="🔍 Ovoz topilmadi",
-                description=f"'{query}' bo'yicha hech qanday ovoz topilmadi." if query else "Hozircha ovozlar mavjud emas.",
+                title="⚠️ Xatolik yuz berdi",
+                description="Ovozlarni yuklashda xatolik yuz berdi.",
                 input_message_content=InputTextMessageContent(
-                    message_text=f"🔍 <b>'{query}'</b> bo'yicha ovoz topilmadi.",
-                    parse_mode="HTML"
+                    message_text="⚠️ Ovozlarni yuklashda xatolik yuz berdi."
                 )
             )
         ]
         await inline_query.answer(results, cache_time=1, is_personal=True)
-        return
-
-    results = []
-    for v in voices:
-        results.append(
-            InlineQueryResultCachedVoice(
-                id=str(v["id"]),
-                voice_file_id=v["file_id"],
-                title=v["title"]
-            )
-        )
-
-    next_offset = str(offset + len(voices)) if len(voices) == PAGE_LIMIT else ""
-
-    await inline_query.answer(
-        results,
-        next_offset=next_offset,
-        cache_time=1,
-        is_personal=True
-    )
 
 @router.chosen_inline_result()
 async def chosen_inline_handler(chosen_result, db: Database):
     try:
-        voice_id = int(chosen_result.result_id)
-        await db.increment_voice_usage(voice_id)
+        res_id = chosen_result.result_id
+        if res_id.startswith("v_"):
+            voice_id = int(res_id.split("_")[1])
+            await db.increment_voice_usage(voice_id)
     except Exception:
         pass
